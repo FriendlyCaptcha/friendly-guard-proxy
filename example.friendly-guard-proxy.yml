@@ -1,0 +1,31 @@
+server:
+  listen: ":8080"
+
+upstream:
+  origin: "http://127.0.0.1:3000"
+
+friendly_guard_api:
+  api_endpoint: "eu" # Available values: "eu", "global", or a full URL
+  sitekey: "<YOUR_SITEKEY>"
+  api_key: "${FRIENDLY_GUARD_API_KEY}"
+  timeout_seconds: 5
+
+# Optional. Must be at least 32 bytes when set.
+pass_signing_secret: "${FRIENDLY_GUARD_PROXY_PASS_SIGNING_SECRET}"
+pass_request_limit: 100
+
+guarded_routes:
+  - "^/protected(/.*)?$"
+
+# The loopback entries below make a proxy running locally work.
+# If this instance of Friendly Guard Proxy accepts public traffic directly, remove this config.
+# Otherwise list the CIDRs of the intermediate proxies in front of it.
+# trusted_proxies:
+#   - "127.0.0.1/32"
+#   - "::1/128"
+
+failure_mode: "open"
+dry_run: false
+
+# Optional page to redirect the browser to after a BLOCK decision.
+# block_redirect_url: "https://example.com/request-blocked"
