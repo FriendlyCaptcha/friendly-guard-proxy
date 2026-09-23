@@ -4,7 +4,7 @@ Friendly Guard Proxy is a Go reverse proxy that protects your application from b
 It is deployed in front of one upstream application and requires no changes to that application.
 
 The proxy handles route enforcement, calls the Friendly Guard decision API, serves the returned
-interstitial, and issues a local pass cookie after an `ALLOW` decision. The API owns decision IDs,
+interstitial ([explained below](#browser-check-and-challenge)), and issues a local pass cookie after an `ALLOW` decision. The API owns decision IDs,
 browser-check and challenge state, proof validation, and interstitial HTML. The state exchanged with the browser is an
 opaque screening context; Friendly Guard Proxy does not parse or persist it.
 
@@ -45,21 +45,21 @@ Environment variables are expanded before YAML is decoded. Unknown YAML fields a
 refuses to start without at least one guarded route. This prevents a misspelled security setting from silently disabling
 protection.
 
-| Field                                | Required | Default   | Description                                                                                            |
-| ------------------------------------ | -------- | --------- | ------------------------------------------------------------------------------------------------------ |
-| `server.listen`                      | No       | `:8080`   | Address on which the proxy serves HTTP.                                                                |
-| `upstream.origin`                    | Yes      |           | HTTP or HTTPS upstream URL. A path in this URL becomes a base path for proxied requests.               |
-| `friendly_guard_api.api_endpoint`    | No       | `eu`      | `eu` (`https://eu.frcapi.com`), `global` (`https://global.frcapi.com`), or a full Friendly Guard API URL. |
-| `friendly_guard_api.sitekey`         | Yes      |           | Sitekey protected by this proxy instance.                                                              |
-| `friendly_guard_api.api_key`         | Yes      |           | API key used to authenticate requests to the Friendly Guard decision API.                              |
-| `friendly_guard_api.timeout_seconds` | No       | `5`       | Timeout for each decision API request.                                                                 |
+| Field                                | Required | Default   | Description                                                                                                                            |
+| ------------------------------------ | -------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `server.listen`                      | No       | `:8080`   | Address on which the proxy serves HTTP.                                                                                                |
+| `upstream.origin`                    | Yes      |           | HTTP or HTTPS upstream URL. A path in this URL becomes a base path for proxied requests.                                               |
+| `friendly_guard_api.api_endpoint`    | No       | `eu`      | `eu` (`https://eu.frcapi.com`), `global` (`https://global.frcapi.com`), or a full Friendly Guard API URL.                              |
+| `friendly_guard_api.sitekey`         | Yes      |           | Sitekey protected by this proxy instance.                                                                                              |
+| `friendly_guard_api.api_key`         | Yes      |           | API key used to authenticate requests to the Friendly Guard decision API.                                                              |
+| `friendly_guard_api.timeout_seconds` | No       | `5`       | Timeout for each decision API request.                                                                                                 |
 | `pass_signing_secret`                | No       | Generated | Secret used to sign local pass cookies. Must be at least 32 bytes when set. If unset, the proxy generates an ephemeral 32-byte secret. |
-| `pass_request_limit`                 | No       | `100`     | Protected upstream requests allowed per pass before re-screening. Set to `0` to disable rate limiting. |
-| `guarded_routes`                     | Yes      |           | Non-empty list of Go regular expressions identifying protected URL paths.                              |
-| `trusted_proxies`                    | No       | Empty     | CIDR ranges allowed to supply trusted forwarding headers.                                              |
-| `failure_mode`                       | No       | `open`    | Behavior for transient decision failures and unknown outcomes: `open` or `closed`.                     |
-| `dry_run`                            | No       | `false`   | Record decisions without enforcing valid `BLOCK` or `CHALLENGE` outcomes.                              |
-| `block_redirect_url`                 | No       |           | Full HTTP(S) URL to redirect the browser to after a `BLOCK` decision.                                  |
+| `pass_request_limit`                 | No       | `100`     | Protected upstream requests allowed per pass before re-screening. Set to `0` to disable rate limiting.                                 |
+| `guarded_routes`                     | Yes      |           | Non-empty list of Go regular expressions identifying protected URL paths.                                                              |
+| `trusted_proxies`                    | No       | Empty     | CIDR ranges allowed to supply trusted forwarding headers.                                                                              |
+| `failure_mode`                       | No       | `open`    | Behavior for transient decision failures and unknown outcomes: `open` or `closed`.                                                     |
+| `dry_run`                            | No       | `false`   | Record decisions without enforcing valid `BLOCK` or `CHALLENGE` outcomes.                                                              |
+| `block_redirect_url`                 | No       |           | Full HTTP(S) URL to redirect the browser to after a `BLOCK` decision.                                                                  |
 
 Changing `pass_signing_secret` invalidates all existing pass cookies. A configured secret must be at least
 32 bytes. Every replica must use the same secret. A pass signed by one replica is rejected by another replica
@@ -126,6 +126,8 @@ The prescreen decision has one of these outcomes:
 | `CHECK` | Return the non-cacheable interstitial HTML on the protected URL.                                         |
 
 ### Browser Check And Challenge
+
+An interstitial is a temporary page shown in place of a requested protected page while Friendly Guard checks the browser.
 
 The interstitial runs the Friendly Captcha SDK on the protected URL. It obtains a risk token and posts it, together with
 the opaque screening context, to the same-origin endpoint:
