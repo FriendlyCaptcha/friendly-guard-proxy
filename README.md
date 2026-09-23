@@ -276,6 +276,18 @@ tokens, and captcha responses are not logged.
 go build -o friendly-guard-proxy ./cmd/friendly-guard-proxy
 ```
 
+Use `./friendly-guard-proxy -version` to print the version and build metadata.
+Source builds default to version `0.0.0`; GoReleaser injects the release version,
+commit date, and full commit hash.
+
+To build release artifacts locally without publishing, install GoReleaser v2 and run:
+
+```sh
+goreleaser release --snapshot --clean
+```
+
+Artifacts are written to `dist/`.
+
 ## Testing
 
 ```sh

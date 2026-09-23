@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/friendlycaptcha/friendly-guard-proxy/internal/version"
+	"github.com/friendlycaptcha/friendly-guard-proxy/internal/buildinfo"
 )
 
 type PrescreenRequest struct {
@@ -152,7 +152,7 @@ func (c *Client) post(ctx context.Context, path string, request any) (Result, er
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Api-Key", c.apiKey)
-	req.Header.Set("Frc-Guard-Sdk", fmt.Sprintf("%s@%s", guardSDKName, version.Version))
+	req.Header.Set("Frc-Guard-Sdk", fmt.Sprintf("%s@%s", guardSDKName, buildinfo.Version()))
 
 	resp, err := c.client.Do(req)
 	if err != nil {

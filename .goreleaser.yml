@@ -1,0 +1,35 @@
+version: 2
+
+project_name: friendly-guard-proxy
+
+builds:
+  - main: ./cmd/friendly-guard-proxy
+    binary: friendly-guard-proxy
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - >-
+        -s -w
+        -X github.com/friendlycaptcha/friendly-guard-proxy/internal/buildinfo.version={{ .Version }}
+        -X github.com/friendlycaptcha/friendly-guard-proxy/internal/buildinfo.commitDate={{ .CommitDate }}
+        -X github.com/friendlycaptcha/friendly-guard-proxy/internal/buildinfo.commit={{ .FullCommit }}
+
+archives:
+  - formats: [binary]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true
+
+release:
+  mode: keep-existing

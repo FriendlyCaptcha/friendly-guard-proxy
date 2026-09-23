@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/friendlycaptcha/friendly-guard-proxy/internal/buildinfo"
 	"github.com/friendlycaptcha/friendly-guard-proxy/internal/config"
 	guardpkg "github.com/friendlycaptcha/friendly-guard-proxy/internal/guard"
 )
@@ -26,7 +27,12 @@ const (
 func main() {
 	configPath := flag.String("config", "friendly-guard-proxy.yml", "Path to the Friendly Guard Proxy YAML configuration")
 	logLevelName := flag.String("log-level", "info", "Log level: debug, info, warn, or error")
+	showVersion := flag.Bool("version", false, "Print build information and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(buildinfo.FullVersion())
+		return
+	}
 
 	logLevel, err := parseLogLevel(*logLevelName)
 	if err != nil {
