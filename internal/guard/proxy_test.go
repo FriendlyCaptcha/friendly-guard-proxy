@@ -1,6 +1,8 @@
 package guard
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -620,6 +622,63 @@ func TestGuardProxyInterstitialAndContinuation(t *testing.T) {
 	_ = continueResp.Body.Close()
 	if result.Outcome != api.OutcomeAllow || len(continueResp.Cookies()) != 1 {
 		t.Fatalf("unexpected challenge continuation: %#v cookies=%#v", result, continueResp.Cookies())
+	}
+}
+
+func TestGuardProxyInterstitialCompression(t *testing.T) {
+	html := "<html>" + strings.Repeat("<p>check</p>", 1000) + "</html>"
+	proxy, _ := newTestProxy(t, func(_ testDecisionRequest) api.ResponseData {
+		return api.ResponseData{Outcome: api.OutcomeCheck, InterstitialHTML: html}
+	})
+	server := httptest.NewServer(proxy)
+	defer server.Close()
+
+	tests := []struct {
+		name           string
+		acceptEncoding string
+		wantGzip       bool
+	}{
+		{name: "gzip", acceptEncoding: "gzip, deflate, br, zstd", wantGzip: true},
+		{name: "gzip with weight", acceptEncoding: "br;q=1.0, GZIP;q=0.5", wantGzip: true},
+		{name: "other encodings only", acceptEncoding: "br, zstd", wantGzip: false},
+		{name: "identity", acceptEncoding: "identity", wantGzip: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := newTestRequest(t, http.MethodGet, server.URL+"/protected", nil)
+			// Setting Accept-Encoding explicitly disables the transparent decompression of the HTTP client.
+			req.Header.Set("Accept-Encoding", tt.acceptEncoding)
+			resp := doTestRequest(t, req)
+			raw, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+
+			if resp.StatusCode != http.StatusOK || resp.Header.Get("Cache-Control") != "no-store" || resp.Header.Get("Content-Type") != "text/html; charset=utf-8" {
+				t.Fatalf("unexpected interstitial: status=%d headers=%#v", resp.StatusCode, resp.Header)
+			}
+
+			body := raw
+			if tt.wantGzip {
+				if got := resp.Header.Get("Content-Encoding"); got != "gzip" {
+					t.Fatalf("unexpected Content-Encoding: %q", got)
+				}
+				if len(raw) >= len(html) {
+					t.Fatalf("compressed interstitial is not smaller: %d >= %d", len(raw), len(html))
+				}
+				gz, err := gzip.NewReader(bytes.NewReader(raw))
+				if err != nil {
+					t.Fatal(err)
+				}
+				body, err = io.ReadAll(gz)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if got := resp.Header.Get("Content-Encoding"); got != "" {
+				t.Fatalf("unexpected Content-Encoding: %q", got)
+			}
+			if string(body) != html {
+				t.Fatalf("unexpected interstitial body: %d bytes", len(body))
+			}
+		})
 	}
 }
 

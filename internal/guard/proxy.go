@@ -1,6 +1,7 @@
 package guard
 
 import (
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/friendlycaptcha/friendly-guard-proxy/internal/api"
@@ -36,6 +38,7 @@ type Proxy struct {
 	pass        *pass.Signer
 	rateLimiter *ratelimit.Limiter
 	apiClient   *api.Client
+	apiEndpoint string
 	trusted     requestinfo.TrustedProxySet
 }
 
@@ -83,6 +86,7 @@ func NewProxy(cfg config.Config) (*Proxy, error) {
 		pass:        passSigner,
 		rateLimiter: rateLimiter,
 		apiClient:   client,
+		apiEndpoint: apiEndpoint,
 		trusted:     trusted,
 	}, nil
 }
@@ -270,7 +274,7 @@ func (g *Proxy) handlePrescreen(w http.ResponseWriter, r *http.Request, logger *
 			writeGuardError(w, http.StatusBadGateway, "Friendly Guard Proxy received an invalid interstitial response")
 			return
 		}
-		writeInterstitial(w, resp.InterstitialHTML)
+		g.writeInterstitial(w, r, resp.InterstitialHTML)
 	default:
 		failOpen := g.failureModeOpen()
 		logger.Warn("prescreen returned unknown outcome", "outcome", resp.Outcome, "fail_open", failOpen)
@@ -481,10 +485,29 @@ func writeHealth(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, "ok\n")
 }
 
-func writeInterstitial(w http.ResponseWriter, html string) {
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write([]byte(html))
+var gzipWriterPool = sync.Pool{
+	New: func() any { return gzip.NewWriter(io.Discard) },
+}
+
+func (g *Proxy) writeInterstitial(w http.ResponseWriter, r *http.Request, html string) {
+	h := w.Header()
+	h.Set("Cache-Control", "no-store")
+	h.Set("Content-Type", "text/html; charset=utf-8")
+	// The interstitial uses the API endpoint as the SDK's API endpoint, so let the browser connect to it while it
+	// is still downloading the page.
+	h.Add("Link", "<"+g.apiEndpoint+">; rel=preconnect")
+
+	if !strings.Contains(strings.ToLower(r.Header.Get("Accept-Encoding")), "gzip") {
+		_, _ = io.WriteString(w, html)
+		return
+	}
+
+	h.Set("Content-Encoding", "gzip")
+	gz := gzipWriterPool.Get().(*gzip.Writer) //nolint:errcheck,forcetypeassert // The pool only holds gzip writers.
+	defer gzipWriterPool.Put(gz)
+	gz.Reset(w)
+	_, _ = io.WriteString(gz, html)
+	_ = gz.Close()
 }
 
 func writeDecisionFailure(w http.ResponseWriter, statusCode int, err error) {
