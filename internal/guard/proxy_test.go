@@ -37,7 +37,7 @@ func validConfig() config.Config {
 		},
 		PassSigningSecret: "0123456789abcdef0123456789abcdef",
 		PassRequestLimit:  100,
-		GuardedRoutes:     []string{"^/protected(/.*)?$"},
+		GuardedRoutes:     []config.GuardedRoute{{Path: "^/protected(/.*)?$"}},
 		FailureMode:       "open",
 	}
 }
@@ -171,6 +171,61 @@ func TestGuardProxyProxyAndMethodMatrix(t *testing.T) {
 		if resp.StatusCode != tc.status {
 			t.Fatalf("%s %s: got %d want %d", tc.method, tc.path, resp.StatusCode, tc.status)
 		}
+	}
+}
+
+func TestGuardProxyQueryConditions(t *testing.T) {
+	proxy, _ := newTestProxyWithConfig(t, func(cfg *config.Config) {
+		cfg.GuardedRoutes = []config.GuardedRoute{
+			{Path: "^/search$", Query: map[string]string{"export": "^true$"}},
+			{Path: "^/protected$"},
+			{Path: "^/export(/.*)?$", Query: map[string]string{"export": "^true$"}},
+		}
+	}, func(_ testDecisionRequest) api.ResponseData {
+		return api.ResponseData{Outcome: api.OutcomeBlock}
+	})
+	server := httptest.NewServer(proxy)
+	defer server.Close()
+
+	for _, tc := range []struct {
+		method string
+		path   string
+		status int
+	}{
+		{http.MethodGet, "/search", http.StatusOK},
+		{http.MethodGet, "/search?export=false", http.StatusOK},
+		{http.MethodGet, "/search?export=true", http.StatusForbidden},
+		{http.MethodPost, "/search?export=false", http.StatusOK},
+		{http.MethodPost, "/search?other=1&export=tr%75e", http.StatusForbidden},
+		{http.MethodPost, "/search?export=false&export=true", http.StatusForbidden},
+		{http.MethodPost, "/public/../search?export=true", http.StatusForbidden},
+		{http.MethodPost, "/search/../public?export=true", http.StatusOK},
+		{http.MethodPost, "/export/../public?export=true", http.StatusForbidden},
+		{http.MethodPost, "/search?export=%zz", http.StatusForbidden},
+		{http.MethodPost, "/search?export=true;other=1", http.StatusForbidden},
+		{http.MethodPost, "/public?export=true", http.StatusOK},
+		{http.MethodOptions, "/search?export=true", http.StatusOK},
+		{http.MethodPost, "/protected?export=false", http.StatusForbidden},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			resp := doTestRequest(t, newTestRequest(t, tc.method, server.URL+tc.path, nil))
+			defer resp.Body.Close()
+			if resp.StatusCode != tc.status {
+				t.Fatalf("got status %d, want %d", resp.StatusCode, tc.status)
+			}
+			if tc.status == http.StatusOK && resp.Header.Get("X-Upstream") != "true" {
+				t.Fatal("expected request to reach upstream")
+			}
+			if tc.status == http.StatusOK {
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if want := "upstream:" + tc.method + ":" + tc.path + ":"; string(body) != want {
+					t.Fatalf("upstream received %q, want %q", body, want)
+				}
+			}
+		})
 	}
 }
 

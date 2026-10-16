@@ -180,7 +180,7 @@ func (g *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		g.clearPass(w, r)
 	}
 
-	protected := g.matcher.protected(r.URL.Path)
+	protected := g.matcher.protected(r.URL)
 	if !protected || r.Method == http.MethodOptions {
 		logger.Debug("proxying request", "route_protected", protected)
 		g.proxy.ServeHTTP(w, r)
