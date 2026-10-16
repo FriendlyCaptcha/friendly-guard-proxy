@@ -15,7 +15,11 @@ pass_signing_secret: "${FRIENDLY_GUARD_PROXY_PASS_SIGNING_SECRET}"
 pass_request_limit: 100
 
 guarded_routes:
-  - "^/protected(/.*)?$"
+  - path: "^/protected(/.*)?$"
+  # Optional query conditions: protect /search only when export=true.
+  # - path: "^/search$"
+  #   query:
+  #     export: "^true$"
 
 # The loopback entries below make a proxy running locally work.
 # If this instance of Friendly Guard Proxy accepts public traffic directly, remove this config.

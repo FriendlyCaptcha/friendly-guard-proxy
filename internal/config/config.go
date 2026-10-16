@@ -22,7 +22,7 @@ type Config struct {
 	PassSigningSecret string                 `yaml:"pass_signing_secret"`
 	PassRequestLimit  int                    `yaml:"pass_request_limit"`
 	TrustedProxies    []string               `yaml:"trusted_proxies"`
-	GuardedRoutes     []string               `yaml:"guarded_routes"`
+	GuardedRoutes     []GuardedRoute         `yaml:"guarded_routes"`
 	FailureMode       string                 `yaml:"failure_mode"`
 	DryRun            bool                   `yaml:"dry_run"`
 	BlockRedirectURL  string                 `yaml:"block_redirect_url"`
@@ -41,6 +41,13 @@ type FriendlyGuardAPIConfig struct {
 	Sitekey        string `yaml:"sitekey"`
 	APIKey         string `yaml:"api_key"`
 	TimeoutSeconds int    `yaml:"timeout_seconds"`
+}
+
+// GuardedRoute protects a path when every query condition matches. Query values
+// are regular expressions; a key must be present and at least one value must match.
+type GuardedRoute struct {
+	Path  string            `yaml:"path"`
+	Query map[string]string `yaml:"query"`
 }
 
 func defaultConfig() Config {
@@ -122,11 +129,19 @@ func (c Config) Validate() error {
 		return fmt.Errorf("guarded_routes must contain at least one entry")
 	}
 	for _, route := range c.GuardedRoutes {
-		if route == "" {
-			return fmt.Errorf("guarded_routes entries must be non-empty regexes")
+		if route.Path == "" {
+			return fmt.Errorf("guarded_routes entries must have non-empty path regexes")
 		}
-		if _, err := regexp.Compile(route); err != nil {
-			return fmt.Errorf("invalid guarded_routes entry regex %q: %w", route, err)
+		if _, err := regexp.Compile(route.Path); err != nil {
+			return fmt.Errorf("invalid guarded_routes path regex %q: %w", route.Path, err)
+		}
+		for key, value := range route.Query {
+			if key == "" {
+				return fmt.Errorf("guarded_routes query keys must be non-empty")
+			}
+			if _, err := regexp.Compile(value); err != nil {
+				return fmt.Errorf("invalid guarded_routes query regex for %q: %w", key, err)
+			}
 		}
 	}
 	return nil
