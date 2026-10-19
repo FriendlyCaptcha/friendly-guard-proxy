@@ -55,7 +55,7 @@ protection.
 | `friendly_guard_api.timeout_seconds` | No       | `5`       | Timeout for each decision API request.                                                                                                 |
 | `pass_signing_secret`                | No       | Generated | Secret used to sign local pass cookies. Must be at least 32 bytes when set. If unset, the proxy generates an ephemeral 32-byte secret. |
 | `pass_request_limit`                 | No       | `100`     | Protected upstream requests allowed per pass before re-screening. Set to `0` to disable rate limiting.                                 |
-| `guarded_routes`                     | Yes      |           | Non-empty list of Go regular expressions identifying protected URL paths.                                                              |
+| `guarded_routes`                     | Yes      |           | Non-empty list of rules with a required `path` regex and optional `query` conditions. See [Route Matching](#route-matching).              |
 | `trusted_proxies`                    | No       | Empty     | CIDR ranges allowed to supply trusted forwarding headers.                                                                              |
 | `failure_mode`                       | No       | `open`    | Behavior for transient decision failures and unknown outcomes: `open` or `closed`.                                                     |
 | `dry_run`                            | No       | `false`   | Record decisions without enforcing valid `BLOCK` or `CHALLENGE` outcomes.                                                              |
@@ -75,7 +75,7 @@ Friendly Guard Proxy makes its enforcement decision before proxying a request.
 1. The proxy handles the exact paths `/__friendly-guard/v1/healthz` and `/__friendly-guard/v1/continue` itself. These exact paths
    are never sent upstream.
 2. Checks the `friendly_guard_pass` cookie. Invalid, expired, wrongly bound, or wrong-site cookies are cleared.
-3. Checks the request path against every `guarded_routes` expression.
+3. Checks the request path and any query conditions against every `guarded_routes` rule.
 4. An unprotected route or an `OPTIONS` request is proxied immediately.
 5. A protected request with a valid pass is proxied if its request limit has not been exhausted (or if rate limiting is disabled).
 6. An exhausted pass is cleared and treated like a missing pass.
@@ -88,8 +88,33 @@ protected `GET` that obtains a pass, after which forms and API calls on protecte
 
 ### Route Matching
 
-Queries are not part of route matching. Friendly Guard Proxy tests each regular expression against both the original URL path and its
-`path.Clean` normalized form. The request is protected if either form matches.
+Friendly Guard Proxy tests each path regular expression against both the original URL path and its
+`path.Clean` normalized form. A rule's path matches if either form matches. Every rule requires a `path` regex
+and can optionally require query parameters:
+
+```yaml
+guarded_routes:
+  - path: '^/protected(/.*)?$'
+  - path: '^/search$'
+    query:
+      export: '^true$'
+```
+
+This protects every request to `/protected` and its subpaths, plus `/search?export=true`.
+Requests to `/search`, `/search?export=false`, and `/search?export=` are unprotected unless another rule matches.
+
+Every `query` key in a rule must be present, and at least one of its values must match the corresponding Go regular
+expression. All query conditions in a rule must match; matching any rule protects the request. A conditional rule does
+not exempt a request matched by another rule. Omit `query` for a path-only rule.
+
+Parameter names and values are URL-decoded before matching, including decoding `+` to a space. Matching is case-sensitive
+and independent of parameter order. Repeated parameters match if **any** value matches, so adding a nonmatching value
+cannot bypass protection. Use `'.*'` to require a parameter's presence (including an empty value), or `'^$'` to require an
+empty value. Anchor value expressions with `^` and `$` when the entire value should match.
+
+Malformed queries (such as invalid percent escapes or unescaped semicolons) on a path with query conditions are treated
+as protected. This prevents partial query parsing from silently bypassing protection. Query strings are still excluded
+from logs and the Friendly Guard API request context.
 
 For example, with `^/protected(/.*)?$`, all of these requests are protected:
 
@@ -103,7 +128,8 @@ For example, with `^/protected(/.*)?$`, all of these requests are protected:
 This prevents the proxy and an upstream router from reaching different security decisions when one of them
 normalizes dot segments. The proxy still forwards the original path unchanged; normalization is only an
 additional protection check.
-Encoded question marks (`%3F`) are path characters and remain part of path normalization; actual query strings are excluded.
+Encoded question marks (`%3F`) are path characters and remain part of path normalization; actual query strings are evaluated
+separately by the optional `query` conditions.
 Anchor route expressions with `^` and `$` when the whole path should match.
 
 ### Prescreen
