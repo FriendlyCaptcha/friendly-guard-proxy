@@ -19,6 +19,7 @@ func validConfig() Config {
 			TimeoutSeconds: 1,
 		},
 		PassSigningSecret: "0123456789abcdef0123456789abcdef",
+		PassTTLSeconds:    15 * 60,
 		PassRequestLimit:  100,
 		GuardedRoutes:     []GuardedRoute{{Path: "^/protected(/.*)?$"}},
 		FailureMode:       "open",
@@ -54,6 +55,8 @@ func TestConfigValidation(t *testing.T) {
 		{name: "missing API key", mutate: func(c *Config) { c.FriendlyGuardAPI.APIKey = "" }},
 		{name: "invalid API endpoint", mutate: func(c *Config) { c.FriendlyGuardAPI.APIEndpoint = "://" }},
 		{name: "negative timeout", mutate: func(c *Config) { c.FriendlyGuardAPI.TimeoutSeconds = -1 }},
+		{name: "zero pass TTL", mutate: func(c *Config) { c.PassTTLSeconds = 0 }},
+		{name: "negative pass TTL", mutate: func(c *Config) { c.PassTTLSeconds = -1 }},
 		{name: "negative pass request limit", mutate: func(c *Config) { c.PassRequestLimit = -1 }},
 		{name: "short pass signing secret", mutate: func(c *Config) { c.PassSigningSecret = "too-short" }},
 		{name: "invalid failure mode", mutate: func(c *Config) { c.FailureMode = "sometimes" }},
@@ -98,7 +101,7 @@ guarded_routes:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.FriendlyGuardAPI.APIKey != "expanded-api-key" || cfg.PassSigningSecret != "expanded-0123456789abcdef0123456" || cfg.Server.Listen != ":8080" || cfg.FriendlyGuardAPI.TimeoutSeconds != 5 || cfg.PassRequestLimit != 100 || cfg.FailureMode != "open" || cfg.DryRun {
+	if cfg.FriendlyGuardAPI.APIKey != "expanded-api-key" || cfg.PassSigningSecret != "expanded-0123456789abcdef0123456" || cfg.Server.Listen != ":8080" || cfg.FriendlyGuardAPI.TimeoutSeconds != 5 || cfg.PassTTLSeconds != 900 || cfg.PassRequestLimit != 100 || cfg.FailureMode != "open" || cfg.DryRun {
 		t.Fatalf("unexpected loaded config: %#v", cfg)
 	}
 }

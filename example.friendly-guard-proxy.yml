@@ -12,6 +12,7 @@ friendly_guard_api:
 
 # Optional. Must be at least 32 bytes when set.
 pass_signing_secret: "${FRIENDLY_GUARD_PROXY_PASS_SIGNING_SECRET}"
+pass_ttl_seconds: 900
 pass_request_limit: 100
 
 guarded_routes:

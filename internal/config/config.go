@@ -20,6 +20,7 @@ type Config struct {
 	Upstream          UpstreamConfig         `yaml:"upstream"`
 	FriendlyGuardAPI  FriendlyGuardAPIConfig `yaml:"friendly_guard_api"`
 	PassSigningSecret string                 `yaml:"pass_signing_secret"`
+	PassTTLSeconds    int                    `yaml:"pass_ttl_seconds"`
 	PassRequestLimit  int                    `yaml:"pass_request_limit"`
 	TrustedProxies    []string               `yaml:"trusted_proxies"`
 	GuardedRoutes     []GuardedRoute         `yaml:"guarded_routes"`
@@ -59,6 +60,7 @@ func defaultConfig() Config {
 			APIEndpoint:    "eu",
 			TimeoutSeconds: 5,
 		},
+		PassTTLSeconds:   15 * 60,
 		PassRequestLimit: 100,
 		FailureMode:      "open",
 	}
@@ -97,6 +99,8 @@ func (c Config) Validate() error {
 		return fmt.Errorf("friendly_guard_api.api_key is required")
 	case c.FriendlyGuardAPI.TimeoutSeconds <= 0:
 		return fmt.Errorf("friendly_guard_api.timeout_seconds must be positive")
+	case c.PassTTLSeconds <= 0:
+		return fmt.Errorf("pass_ttl_seconds must be positive")
 	case c.PassRequestLimit < 0:
 		return fmt.Errorf("pass_request_limit must be non-negative")
 	case c.PassSigningSecret != "" && len(c.PassSigningSecret) < MinPassSigningSecretBytes:

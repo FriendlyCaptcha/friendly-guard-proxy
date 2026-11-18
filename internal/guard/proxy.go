@@ -28,7 +28,6 @@ const (
 	continuePath   = "/__friendly-guard/v1/continue"
 	healthPath     = "/__friendly-guard/v1/healthz"
 	passCookieName = "friendly_guard_pass"
-	defaultPassTTL = 15 * time.Minute
 )
 
 type Proxy struct {
@@ -36,6 +35,7 @@ type Proxy struct {
 	proxy       *httputil.ReverseProxy
 	matcher     *matcher
 	pass        *pass.Signer
+	passTTL     time.Duration
 	rateLimiter *ratelimit.Limiter
 	apiClient   *api.Client
 	apiEndpoint string
@@ -68,9 +68,10 @@ func NewProxy(cfg config.Config) (*Proxy, error) {
 	if err != nil {
 		return nil, err
 	}
+	passTTL := time.Duration(cfg.PassTTLSeconds) * time.Second
 	var rateLimiter *ratelimit.Limiter
 	if cfg.PassRequestLimit > 0 {
-		rateLimiter, err = ratelimit.New(cfg.PassRequestLimit, defaultPassTTL)
+		rateLimiter, err = ratelimit.New(cfg.PassRequestLimit, passTTL)
 		if err != nil {
 			return nil, err
 		}
@@ -84,6 +85,7 @@ func NewProxy(cfg config.Config) (*Proxy, error) {
 		proxy:       newReverseProxy(upstream, trusted),
 		matcher:     m,
 		pass:        passSigner,
+		passTTL:     passTTL,
 		rateLimiter: rateLimiter,
 		apiClient:   client,
 		apiEndpoint: apiEndpoint,
@@ -426,7 +428,7 @@ func (g *Proxy) passCookie(r *http.Request) pass.SignedPass {
 }
 
 func (g *Proxy) setPass(w http.ResponseWriter, r *http.Request, initialRequests int) error {
-	signedPass, err := g.pass.NewForRequest(r, defaultPassTTL)
+	signedPass, err := g.pass.NewForRequest(r, g.passTTL)
 	if err != nil {
 		return err
 	}
@@ -435,8 +437,8 @@ func (g *Proxy) setPass(w http.ResponseWriter, r *http.Request, initialRequests 
 		Name:     passCookieName,
 		Value:    signedPass.Token,
 		Path:     "/",
-		MaxAge:   int(defaultPassTTL.Seconds()),
-		Expires:  time.Now().Add(defaultPassTTL),
+		MaxAge:   int(g.passTTL.Seconds()),
+		Expires:  time.Now().Add(g.passTTL),
 		HttpOnly: true,
 		Secure:   g.passCookieSecure(r),
 		SameSite: http.SameSiteLaxMode,

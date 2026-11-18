@@ -54,6 +54,7 @@ protection.
 | `friendly_guard_api.api_key`         | Yes      |           | API key used to authenticate requests to the Friendly Guard decision API.                                                              |
 | `friendly_guard_api.timeout_seconds` | No       | `5`       | Timeout for each decision API request.                                                                                                 |
 | `pass_signing_secret`                | No       | Generated | Secret used to sign local pass cookies. Must be at least 32 bytes when set. If unset, the proxy generates an ephemeral 32-byte secret. |
+| `pass_ttl_seconds`                   | No       | `900`     | Lifetime of a pass cookie in seconds. Must be positive.                                                                                |
 | `pass_request_limit`                 | No       | `100`     | Protected upstream requests allowed per pass before re-screening. Set to `0` to disable rate limiting.                                 |
 | `guarded_routes`                     | Yes      |           | Non-empty list of rules with a required `path` regex and optional `query` conditions. See [Route Matching](#route-matching).              |
 | `trusted_proxies`                    | No       | Empty     | CIDR ranges allowed to supply trusted forwarding headers.                                                                              |
@@ -147,7 +148,7 @@ The prescreen decision has one of these outcomes:
 
 | Outcome | Friendly Guard Proxy behavior                                                                            |
 | ------- | -------------------------------------------------------------------------------------------------------- |
-| `ALLOW` | Set a 15-minute pass cookie and proxy the original request.                                              |
+| `ALLOW` | Set a pass cookie with the configured lifetime and proxy the original request.                           |
 | `BLOCK` | Redirect to `block_redirect_url` when configured; otherwise return a non-cacheable `403 Forbidden` page. |
 | `CHECK` | Return the non-cacheable interstitial HTML on the protected URL.                                         |
 
@@ -187,7 +188,7 @@ number of `CHALLENGE` decisions as the measure of requests that would have exper
 
 ## Pass Cookie
 
-Friendly Guard Proxy issues a stateless JWT in the `friendly_guard_pass` cookie. The cookie has fixed behavior:
+Friendly Guard Proxy issues a stateless JWT in the `friendly_guard_pass` cookie. The cookie has the following behavior:
 
 - `HttpOnly`
 - `SameSite=Lax`
@@ -197,7 +198,7 @@ Friendly Guard Proxy issues a stateless JWT in the `friendly_guard_pass` cookie.
 The JWT is signed with HS256 using the configured pass signing secret. It contains issued-at and expiry timestamps, is scoped to
 the configured sitekey through its audience, and is bound to the browser's User-Agent.
 
-Every pass, including fail-open passes, has a fixed lifetime of 15 minutes. The cookie is only a clearance signal; it must not
+Every pass, including fail-open passes, has the lifetime configured by `pass_ttl_seconds` (15 minutes by default). The cookie is only a clearance signal; it must not
 be treated as application authentication or authorization by the upstream.
 
 When rate limiting is enabled, the proxy keeps a bounded in-memory request count keyed by each signed
@@ -217,7 +218,7 @@ When TLS terminates at a load balancer, that load balancer must be configured as
 
 ### `open`
 
-Friendly Guard Proxy issues a 15-minute pass when a transient failure occurs:
+Friendly Guard Proxy issues a pass with the configured lifetime when a transient failure occurs:
 
 - During prescreen, the proxy sets the pass and proxies the original request.
 - During continuation, the proxy sets the pass and returns `ALLOW` so the interstitial can reload without looping.

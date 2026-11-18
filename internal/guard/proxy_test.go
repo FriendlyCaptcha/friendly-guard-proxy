@@ -36,6 +36,7 @@ func validConfig() config.Config {
 			TimeoutSeconds: 1,
 		},
 		PassSigningSecret: "0123456789abcdef0123456789abcdef",
+		PassTTLSeconds:    15 * 60,
 		PassRequestLimit:  100,
 		GuardedRoutes:     []config.GuardedRoute{{Path: "^/protected(/.*)?$"}},
 		FailureMode:       "open",
@@ -357,6 +358,29 @@ func TestGuardProxyAllowSetsPassAndBypassesFutureDecisions(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "upstream:POST:/protected?submitted=1:body" {
 		t.Fatalf("proxy did not preserve request query and body: %q", body)
+	}
+}
+
+func TestGuardProxyUsesConfiguredPassTTL(t *testing.T) {
+	proxy, _ := newTestProxyWithConfig(
+		t,
+		func(cfg *config.Config) { cfg.PassTTLSeconds = 42 },
+		func(_ testDecisionRequest) api.ResponseData {
+			return api.ResponseData{Outcome: api.OutcomeAllow}
+		},
+	)
+	server := httptest.NewServer(proxy)
+	defer server.Close()
+
+	before := time.Now()
+	resp := getTest(t, server.URL+"/protected")
+	defer resp.Body.Close()
+	cookies := resp.Cookies()
+	if len(cookies) != 1 || cookies[0].MaxAge != 42 {
+		t.Fatalf("expected pass cookie with configured TTL: %#v", cookies)
+	}
+	if want := before.Add(42 * time.Second).Truncate(time.Second); cookies[0].Expires.Before(want) || cookies[0].Expires.After(want.Add(2*time.Second)) {
+		t.Fatalf("unexpected pass cookie expiry: got %s want approximately %s", cookies[0].Expires, want)
 	}
 }
 
