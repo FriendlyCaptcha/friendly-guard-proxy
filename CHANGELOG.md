@@ -1,3 +1,7 @@
+## 0.2.1
+
+- Add the `pass_ttl_seconds` configuration option for controlling pass cookie lifetime. The default remains 15 minutes.
+
 ## 0.2.0
 
 - Add optional query parameter conditions to guarded routes.
