@@ -25,9 +25,10 @@ import (
 )
 
 const (
-	continuePath   = "/__friendly-guard/v1/continue"
-	healthPath     = "/__friendly-guard/v1/healthz"
-	passCookieName = "friendly_guard_pass"
+	continuePath    = "/__friendly-guard/v1/continue"
+	healthPath      = "/__friendly-guard/v1/healthz"
+	passCookieName  = "friendly_guard_pass"
+	failOpenPassTTL = 2 * time.Minute
 )
 
 type Proxy struct {
@@ -71,7 +72,8 @@ func NewProxy(cfg config.Config) (*Proxy, error) {
 	passTTL := time.Duration(cfg.PassTTLSeconds) * time.Second
 	var rateLimiter *ratelimit.Limiter
 	if cfg.PassRequestLimit > 0 {
-		rateLimiter, err = ratelimit.New(cfg.PassRequestLimit, passTTL)
+		// Keep request counts for the lifetime of either kind of pass.
+		rateLimiter, err = ratelimit.New(cfg.PassRequestLimit, max(passTTL, failOpenPassTTL))
 		if err != nil {
 			return nil, err
 		}
@@ -245,7 +247,7 @@ func (g *Proxy) handlePrescreen(w http.ResponseWriter, r *http.Request, logger *
 		failOpen := g.failureModeOpen() && decisionFailureUnavailable(result.StatusCode, failureErr)
 		logger.Error("prescreen decision failed", "error", failureErr, "status", result.StatusCode, "fail_open", failOpen)
 		if failOpen {
-			g.allowPrescreen(w, r, logger)
+			g.allowPrescreen(w, r, logger, failOpenPassTTL)
 			return
 		}
 		writeDecisionFailure(w, result.StatusCode, failureErr)
@@ -262,11 +264,11 @@ func (g *Proxy) handlePrescreen(w http.ResponseWriter, r *http.Request, logger *
 
 	switch resp.Outcome {
 	case api.OutcomeAllow:
-		g.allowPrescreen(w, r, logger)
+		g.allowPrescreen(w, r, logger, g.passTTL)
 	case api.OutcomeBlock:
 		if g.cfg.DryRun {
 			logger.Debug("dry-run decision allowed", "outcome", resp.Outcome)
-			g.allowPrescreen(w, r, logger)
+			g.allowPrescreen(w, r, logger, g.passTTL)
 			return
 		}
 		g.blockPrescreen(w, r)
@@ -281,7 +283,7 @@ func (g *Proxy) handlePrescreen(w http.ResponseWriter, r *http.Request, logger *
 		failOpen := g.failureModeOpen()
 		logger.Warn("prescreen returned unknown outcome", "outcome", resp.Outcome, "fail_open", failOpen)
 		if failOpen {
-			g.allowPrescreen(w, r, logger)
+			g.allowPrescreen(w, r, logger, failOpenPassTTL)
 			return
 		}
 		writeGuardError(w, http.StatusBadGateway, "Friendly Guard Proxy received an unknown decision outcome")
@@ -335,7 +337,7 @@ func (g *Proxy) handleContinue(w http.ResponseWriter, r *http.Request, logger *s
 		failOpen := g.failureModeOpen() && decisionFailureUnavailable(result.StatusCode, failureErr)
 		logger.Warn("continuation decision failed", "error", failureErr, "status", result.StatusCode, "fail_open", failOpen)
 		if failOpen {
-			g.allowContinuation(w, r, logger)
+			g.allowContinuation(w, r, logger, failOpenPassTTL)
 			return
 		}
 		writeJSON(w, http.StatusBadGateway, continueResponse{Outcome: api.OutcomeError})
@@ -352,11 +354,11 @@ func (g *Proxy) handleContinue(w http.ResponseWriter, r *http.Request, logger *s
 
 	switch resp.Outcome {
 	case api.OutcomeAllow:
-		g.allowContinuation(w, r, logger)
+		g.allowContinuation(w, r, logger, g.passTTL)
 	case api.OutcomeBlock:
 		if g.cfg.DryRun {
 			logger.Debug("dry-run decision allowed", "outcome", resp.Outcome)
-			g.allowContinuation(w, r, logger)
+			g.allowContinuation(w, r, logger, g.passTTL)
 			return
 		}
 		writeJSON(w, http.StatusOK, continueResponse{
@@ -371,7 +373,7 @@ func (g *Proxy) handleContinue(w http.ResponseWriter, r *http.Request, logger *s
 		}
 		if g.cfg.DryRun {
 			logger.Debug("dry-run decision allowed", "outcome", resp.Outcome)
-			g.allowContinuation(w, r, logger)
+			g.allowContinuation(w, r, logger, g.passTTL)
 			return
 		}
 		writeJSON(w, http.StatusOK, continueResponse{Outcome: api.OutcomeChallenge, ScreeningContext: resp.ScreeningContext})
@@ -379,16 +381,16 @@ func (g *Proxy) handleContinue(w http.ResponseWriter, r *http.Request, logger *s
 		failOpen := g.failureModeOpen()
 		logger.Warn("continuation returned unknown outcome", "outcome", resp.Outcome, "fail_open", failOpen)
 		if failOpen {
-			g.allowContinuation(w, r, logger)
+			g.allowContinuation(w, r, logger, failOpenPassTTL)
 			return
 		}
 		writeJSON(w, http.StatusBadGateway, continueResponse{Outcome: api.OutcomeError})
 	}
 }
 
-func (g *Proxy) allowPrescreen(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
+func (g *Proxy) allowPrescreen(w http.ResponseWriter, r *http.Request, logger *slog.Logger, ttl time.Duration) {
 	// The allowed prescreen request is immediately proxied upstream, so it counts as the pass's first request.
-	if err := g.setPass(w, r, 1); err != nil {
+	if err := g.setPass(w, r, 1, ttl); err != nil {
 		logger.Error("failed to set pass", "error", err)
 		writeGuardError(w, http.StatusBadGateway, "Friendly Guard Proxy failed to set pass")
 		return
@@ -396,9 +398,9 @@ func (g *Proxy) allowPrescreen(w http.ResponseWriter, r *http.Request, logger *s
 	g.proxy.ServeHTTP(w, r)
 }
 
-func (g *Proxy) allowContinuation(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
+func (g *Proxy) allowContinuation(w http.ResponseWriter, r *http.Request, logger *slog.Logger, ttl time.Duration) {
 	// The continuation request does not access the protected upstream. The subsequent page reload counts as the pass's first request.
-	if err := g.setPass(w, r, 0); err != nil {
+	if err := g.setPass(w, r, 0, ttl); err != nil {
 		logger.Error("failed to set pass", "error", err)
 		writeJSON(w, http.StatusBadGateway, continueResponse{Outcome: api.OutcomeError})
 		return
@@ -427,8 +429,8 @@ func (g *Proxy) passCookie(r *http.Request) pass.SignedPass {
 	return g.pass.ParseForRequest(cookie.Value, r)
 }
 
-func (g *Proxy) setPass(w http.ResponseWriter, r *http.Request, initialRequests int) error {
-	signedPass, err := g.pass.NewForRequest(r, g.passTTL)
+func (g *Proxy) setPass(w http.ResponseWriter, r *http.Request, initialRequests int, ttl time.Duration) error {
+	signedPass, err := g.pass.NewForRequest(r, ttl)
 	if err != nil {
 		return err
 	}
@@ -437,8 +439,8 @@ func (g *Proxy) setPass(w http.ResponseWriter, r *http.Request, initialRequests 
 		Name:     passCookieName,
 		Value:    signedPass.Token,
 		Path:     "/",
-		MaxAge:   int(g.passTTL.Seconds()),
-		Expires:  time.Now().Add(g.passTTL),
+		MaxAge:   int(ttl.Seconds()),
+		Expires:  time.Now().Add(ttl),
 		HttpOnly: true,
 		Secure:   g.passCookieSecure(r),
 		SameSite: http.SameSiteLaxMode,

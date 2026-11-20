@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
+
 	"github.com/friendlycaptcha/friendly-guard-proxy/internal/api"
 	"github.com/friendlycaptcha/friendly-guard-proxy/internal/config"
 	"github.com/friendlycaptcha/friendly-guard-proxy/internal/requestinfo"
@@ -372,16 +374,9 @@ func TestGuardProxyUsesConfiguredPassTTL(t *testing.T) {
 	server := httptest.NewServer(proxy)
 	defer server.Close()
 
-	before := time.Now()
 	resp := getTest(t, server.URL+"/protected")
 	defer resp.Body.Close()
-	cookies := resp.Cookies()
-	if len(cookies) != 1 || cookies[0].MaxAge != 42 {
-		t.Fatalf("expected pass cookie with configured TTL: %#v", cookies)
-	}
-	if want := before.Add(42 * time.Second).Truncate(time.Second); cookies[0].Expires.Before(want) || cookies[0].Expires.After(want.Add(2*time.Second)) {
-		t.Fatalf("unexpected pass cookie expiry: got %s want approximately %s", cookies[0].Expires, want)
-	}
+	assertPassTTL(t, resp, proxy.cfg.PassSigningSecret, 42*time.Second)
 }
 
 func TestGuardProxyTracksPassRequestsByID(t *testing.T) {
@@ -395,7 +390,7 @@ func TestGuardProxyTracksPassRequestsByID(t *testing.T) {
 	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "http://guard.example/protected", nil)
 	response := httptest.NewRecorder()
 
-	if err := proxy.setPass(response, req, 1); err != nil {
+	if err := proxy.setPass(response, req, 1, proxy.passTTL); err != nil {
 		t.Fatal(err)
 	}
 	cookies := response.Result().Cookies()
@@ -761,6 +756,26 @@ func TestGuardProxyInterstitialCompression(t *testing.T) {
 	}
 }
 
+func assertPassTTL(t *testing.T, resp *http.Response, secret string, ttl time.Duration) {
+	t.Helper()
+	cookies := resp.Cookies()
+	if len(cookies) != 1 || cookies[0].Name != passCookieName || cookies[0].MaxAge != int(ttl.Seconds()) {
+		t.Fatalf("expected pass cookie with TTL %s, got %#v", ttl, cookies)
+	}
+	claims := &jwt.RegisteredClaims{}
+	if _, err := jwt.ParseWithClaims(cookies[0].Value, claims, func(_ *jwt.Token) (any, error) {
+		return []byte(secret), nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithExpirationRequired()); err != nil {
+		t.Fatalf("invalid signed pass: %v", err)
+	}
+	if claims.IssuedAt == nil || claims.ExpiresAt.Sub(claims.IssuedAt.Time) != ttl {
+		t.Fatalf("expected signed pass with TTL %s, got issued-at %v, expiry %v", ttl, claims.IssuedAt, claims.ExpiresAt)
+	}
+	if expires := cookies[0].Expires; expires.Before(claims.ExpiresAt.Time) || expires.After(time.Now().Add(ttl)) {
+		t.Fatalf("unexpected pass cookie expiry: got %s, signed expiry %s", expires, claims.ExpiresAt.Time)
+	}
+}
+
 func TestGuardProxyFailsOpenForRequestError(t *testing.T) {
 	proxy, apiServer := newTestProxy(t, func(_ testDecisionRequest) api.ResponseData {
 		return api.ResponseData{Outcome: api.OutcomeAllow}
@@ -774,18 +789,16 @@ func TestGuardProxyFailsOpenForRequestError(t *testing.T) {
 	if resp.Header.Get("X-Upstream") != "true" {
 		t.Fatal("expected API failure to proxy upstream")
 	}
-	cookies := resp.Cookies()
-	if len(cookies) != 1 || cookies[0].Name != passCookieName || cookies[0].MaxAge != 900 {
-		t.Fatalf("expected prescreen API failure to fail open with 15-minute pass: cookies=%#v", cookies)
-	}
+	assertPassTTL(t, resp, proxy.cfg.PassSigningSecret, 2*time.Minute)
 
 	continueResp := postJSONTest(t, server.URL+continuePath, strings.NewReader(`{"screening_context":"opaque","risk_token":"token"}`))
 	defer continueResp.Body.Close()
 	var result continueResponse
 	_ = json.NewDecoder(continueResp.Body).Decode(&result)
-	if continueResp.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow || len(continueResp.Cookies()) != 1 {
+	if continueResp.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow {
 		t.Fatalf("expected continuation API failure to fail open with pass: status=%d result=%#v cookies=%#v", continueResp.StatusCode, result, continueResp.Cookies())
 	}
+	assertPassTTL(t, continueResp, proxy.cfg.PassSigningSecret, 2*time.Minute)
 }
 
 func TestGuardProxyFailsOpenForServerDecisionStatus(t *testing.T) {
@@ -813,17 +826,19 @@ func TestGuardProxyFailsOpenForServerDecisionStatus(t *testing.T) {
 
 	resp := getTest(t, server.URL+"/protected")
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Upstream") != "true" || len(resp.Cookies()) != 1 {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Upstream") != "true" {
 		t.Fatalf("expected prescreen server API status to fail open: status=%d cookies=%#v", resp.StatusCode, resp.Cookies())
 	}
+	assertPassTTL(t, resp, cfg.PassSigningSecret, 2*time.Minute)
 
 	continueResp := postJSONTest(t, server.URL+continuePath, strings.NewReader(`{"screening_context":"opaque","risk_token":"token"}`))
 	defer continueResp.Body.Close()
 	var result continueResponse
 	_ = json.NewDecoder(continueResp.Body).Decode(&result)
-	if continueResp.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow || len(continueResp.Cookies()) != 1 {
+	if continueResp.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow {
 		t.Fatalf("expected continuation server API status to fail open: status=%d result=%#v cookies=%#v", continueResp.StatusCode, result, continueResp.Cookies())
 	}
+	assertPassTTL(t, continueResp, cfg.PassSigningSecret, 2*time.Minute)
 }
 
 func TestGuardProxyFailClosedForRequestError(t *testing.T) {
@@ -1050,19 +1065,22 @@ func TestGuardProxyDryRunAllowsContinuationDecisions(t *testing.T) {
 func TestGuardProxyUnknownOutcomeRespectsFailureMode(t *testing.T) {
 	for _, mode := range []string{"open", "closed"} {
 		t.Run(mode, func(t *testing.T) {
-			proxy, _ := newTestProxy(t, func(_ testDecisionRequest) api.ResponseData {
+			proxy, _ := newTestProxyWithConfig(t, func(cfg *config.Config) {
+				cfg.FailureMode = mode
+				cfg.PassTTLSeconds = 42
+			}, func(_ testDecisionRequest) api.ResponseData {
 				return api.ResponseData{Outcome: "UNKNOWN"}
 			})
-			proxy.cfg.FailureMode = mode
 			server := httptest.NewServer(proxy)
 			defer server.Close()
 
 			prescreen := getTest(t, server.URL+"/protected")
 			_ = prescreen.Body.Close()
 			if mode == "open" {
-				if prescreen.StatusCode != http.StatusOK || prescreen.Header.Get("X-Upstream") != "true" || len(prescreen.Cookies()) != 1 {
+				if prescreen.StatusCode != http.StatusOK || prescreen.Header.Get("X-Upstream") != "true" {
 					t.Fatalf("unexpected fail-open prescreen response: status=%d cookies=%#v", prescreen.StatusCode, prescreen.Cookies())
 				}
+				assertPassTTL(t, prescreen, proxy.cfg.PassSigningSecret, 2*time.Minute)
 			} else if prescreen.StatusCode != http.StatusBadGateway || len(prescreen.Cookies()) != 0 {
 				t.Fatalf("unexpected fail-closed prescreen response: status=%d cookies=%#v", prescreen.StatusCode, prescreen.Cookies())
 			}
@@ -1072,9 +1090,10 @@ func TestGuardProxyUnknownOutcomeRespectsFailureMode(t *testing.T) {
 			var result continueResponse
 			_ = json.NewDecoder(continuation.Body).Decode(&result)
 			if mode == "open" {
-				if continuation.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow || len(continuation.Cookies()) != 1 {
+				if continuation.StatusCode != http.StatusOK || result.Outcome != api.OutcomeAllow {
 					t.Fatalf("unexpected fail-open continuation response: status=%d result=%#v cookies=%#v", continuation.StatusCode, result, continuation.Cookies())
 				}
+				assertPassTTL(t, continuation, proxy.cfg.PassSigningSecret, 2*time.Minute)
 			} else if continuation.StatusCode != http.StatusBadGateway || result.Outcome != api.OutcomeError || len(continuation.Cookies()) != 0 {
 				t.Fatalf("unexpected fail-closed continuation response: status=%d result=%#v cookies=%#v", continuation.StatusCode, result, continuation.Cookies())
 			}

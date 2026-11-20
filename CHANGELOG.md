@@ -1,3 +1,7 @@
+## 0.2.2
+
+- Give fail-open passes a fixed two-minute lifetime.
+
 ## 0.2.1
 
 - Add the `pass_ttl_seconds` configuration option for controlling pass cookie lifetime. The default remains 15 minutes.

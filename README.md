@@ -54,7 +54,7 @@ protection.
 | `friendly_guard_api.api_key`         | Yes      |           | API key used to authenticate requests to the Friendly Guard decision API.                                                              |
 | `friendly_guard_api.timeout_seconds` | No       | `5`       | Timeout for each decision API request.                                                                                                 |
 | `pass_signing_secret`                | No       | Generated | Secret used to sign local pass cookies. Must be at least 32 bytes when set. If unset, the proxy generates an ephemeral 32-byte secret. |
-| `pass_ttl_seconds`                   | No       | `900`     | Lifetime of a pass cookie in seconds. Must be positive.                                                                                |
+| `pass_ttl_seconds`                   | No       | `900`     | Lifetime of a regular pass in seconds. Must be positive.                                                                               |
 | `pass_request_limit`                 | No       | `100`     | Protected upstream requests allowed per pass before re-screening. Set to `0` to disable rate limiting.                                 |
 | `guarded_routes`                     | Yes      |           | Non-empty list of rules with a required `path` regex and optional `query` conditions. See [Route Matching](#route-matching).              |
 | `trusted_proxies`                    | No       | Empty     | CIDR ranges allowed to supply trusted forwarding headers.                                                                              |
@@ -198,8 +198,7 @@ Friendly Guard Proxy issues a stateless JWT in the `friendly_guard_pass` cookie.
 The JWT is signed with HS256 using the configured pass signing secret. It contains issued-at and expiry timestamps, is scoped to
 the configured sitekey through its audience, and is bound to the browser's User-Agent.
 
-Every pass, including fail-open passes, has the lifetime configured by `pass_ttl_seconds` (15 minutes by default). The cookie is only a clearance signal; it must not
-be treated as application authentication or authorization by the upstream.
+Regular passes use `pass_ttl_seconds` (15 minutes by default). The cookie signals screening clearance only.
 
 When rate limiting is enabled, the proxy keeps a bounded in-memory request count keyed by each signed
 pass's JWT ID (`jti`). The protected request that receives a pass from prescreen counts as the first request; a pass
@@ -218,7 +217,7 @@ When TLS terminates at a load balancer, that load balancer must be configured as
 
 ### `open`
 
-Friendly Guard Proxy issues a pass with the configured lifetime when a transient failure occurs:
+Friendly Guard Proxy issues a pass with a fixed 2-minute lifetime when a transient failure or unknown decision outcome occurs:
 
 - During prescreen, the proxy sets the pass and proxies the original request.
 - During continuation, the proxy sets the pass and returns `ALLOW` so the interstitial can reload without looping.
